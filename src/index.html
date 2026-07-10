@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ブラウザ・マイクラ（地形自動生成版）</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #87CEEB; }
+        canvas { display: block; }
+        
+        /* 画面中央の照準 */
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 10px;
+            height: 10px;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 24px;
+            font-family: sans-serif;
+            pointer-events: none;
+            user-select: none;
+        }
+        
+        /* 操作説明 */
+        #instructions {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0,0,0,0.6);
+            padding: 15px;
+            font-family: sans-serif;
+            font-size: 14px;
+            pointer-events: none;
+            border-radius: 5px;
+            line-height: 1.5;
+            z-index: 10;
+        }
+
+        /* インベントリ（アイテムスロット） */
+        #hotbar {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 5px;
+            border: 3px solid #333;
+            border-radius: 4px;
+            pointer-events: auto;
+            z-index: 10;
+        }
+        .slot {
+            width: 50px;
+            height: 50px;
+            margin: 0 4px;
+            border: 2px solid #555;
+            background-color: #8b8b8b;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-family: sans-serif;
+            font-weight: bold;
+            font-size: 12px;
+            cursor: pointer;
+            position: relative;
+            background-size: cover;
+            image-rendering: pixelated;
+        }
+        .slot.active {
+            border-color: #fff;
+            box-shadow: 0 0 10px #fff;
+        }
+        .slot-num {
+            position: absolute;
+            top: 2px;
+            left: 4px;
+            text-shadow: 1px 1px 2px black;
+        }
+    </style>
+</head>
+<body>
+    <div id="crosshair">+</div>
+    <div id="instructions">
+        <strong>【操作方法】</strong><br>
+        画面をクリック : ゲームスタート<br>
+        WASD : 移動 | Space : ジャンプ<br>
+        左クリック : ブロック削除 | 右クリック : ブロック配置<br>
+        キーボード【 1 2 3 4 】 : ブロック切り替え
+    </div>
+
+    <div id="hotbar">
+        <div class="slot active" id="slot-1" onclick="selectBlock(0)"><span class="slot-num">1</span></div>
+        <div class="slot" id="slot-2" onclick="selectBlock(1)"><span class="slot-num">2</span></div>
+        <div class="slot" id="slot-3" onclick="selectBlock(2)"><span class="slot-num">3</span></div>
+        <div class="slot" id="slot-4" onclick="selectBlock(3)"><span class="slot-num">4</span></div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js"></script>
+
+    <script>
+        // --- 1. 簡易ノイズ関数（地形の起伏を作る用） ---
+        // Sine関数を組み合わせた簡易的な2D擬似ノイズ
+        function Math_noise(x, z) {
+            return (Math.sin(x * 0.1) * Math.cos(z * 0.1) * 3) + 
+                   (Math.sin(x * 0.05) * Math.sin(z * 0.05) * 5);
+        }
+
+        // --- 2. ドット絵テクスチャをプログラムで生成 ---
+        function createNoiseTexture(type) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 16;
+            canvas.height = 16;
+            const ctx = canvas.getContext('2d');
+            
+            for (let x = 0; x < 16; x++) {
+                for (let y = 0; y < 16; y++) {
+                    let r, g, b;
+                    const noise = Math.random() * 30; // ランダムなノイズ
+                    
+                    if (type === 'grass') { // 草
+                        r = 70 + noise; g = 130 + noise; b = 50;
+                    } else if (type === 'dirt') { // 土
+                        r = 110 + noise; g = 80 + noise; b = 50;
+                    } else if (type === 'stone') { // 石
+                        r = 120 + noise; g = 120 + noise; b = 120 + noise;
+                    } else if (type === 'brick') { // レンガ
+                        if (y % 4 === 0 || x % 4 === 0) { // 目地
+                            r = 180; g = 180; b = 180;
+                        } else {
+                            r = 160 + noise; g = 70 + noise; b = 50;
+                        }
+                    }
+                    ctx.fillStyle = `rgb(${Math.floor(r)},${Math.floor(g)},${Math.floor(b)})`;
+                    ctx.fillRect(x, y, 1, 1);
+                }
+            }
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.magFilter = THREE.NearestFilter;
+            texture.minFilter = THREE.NearestFilter;
+            return { texture, dataUrl: canvas.toDataURL() };
+        }
+
+        // テクスチャの生成とインベントリ（ホットバー）への適用
+        const texGrass = createNoiseTexture('grass');
+        const texDirt = createNoiseTexture('dirt');
+        const texStone = createNoiseTexture('stone');
+        const texBrick = createNoiseTexture('brick');
+
+        document.getElementById('slot-1').style.backgroundImage = `url(${texGrass.dataUrl})`;
+        document.getElementById('slot-2').style.backgroundImage = `url(${texDirt.dataUrl})`;
+        document.getElementById('slot-3').style.backgroundImage = `url(${texStone.dataUrl})`;
+        document.getElementById('slot-4').style.backgroundImage = `url(${texBrick.dataUrl})`;
+
+        // --- 3. ブロックマテリアル（素材）の設定 ---
+        const materials = [
+            new THREE.MeshLambertMaterial({ map: texGrass.texture }),
+            new THREE.MeshLambertMaterial({ map: texDirt.texture }),
+            new THREE.MeshLambertMaterial({ map: texStone.texture }),
+            new THREE.MeshLambertMaterial({ map: texBrick.texture })
+        ];
+        let activeMaterialIndex = 0;
+
+        function selectBlock(index) {
+            activeMaterialIndex = index;
+            document.querySelectorAll('.slot').forEach((slot, i) => {
+                if (i === index) slot.classList.add('active');
+                else slot.classList.remove('active');
+            });
+        }
+
+        // --- 4. 3D空間の基本設定 ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB);
+        scene.fog = new THREE.FogExp2(0x87CEEB, 0.02);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // ライト
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+        directionalLight.position.set(20, 40, 20);
+        scene.add(directionalLight);
+
+        // プレイヤーの物理・移動設定
+        const player = { height: 1.8, radius: 0.4, velocity: new THREE.Vector3(), onGround: false };
+        const controls = new THREE.PointerLockControls(camera, document.body);
+
+        document.body.addEventListener('click', () => { if(!controls.isLocked) controls.lock(); });
+
+        const keys = { forward: false, backward: false, left: false, right: false, jump: false };
+
+        document.addEventListener('keydown', (e) => {
+            switch (e.code) {
+                case 'KeyW': keys.forward = true; break;
+                case 'KeyS': keys.backward = true; break;
+                case 'KeyA': keys.left = true; break;
+                case 'KeyD': keys.right = true; break;
+                case 'Space': keys.jump = true; break;
+                case 'Digit1': selectBlock(0); break;
+                case 'Digit2': selectBlock(1); break;
+                case 'Digit3': selectBlock(2); break;
+                case 'Digit4': selectBlock(3); break;
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            switch (e.code) {
+                case 'KeyW': keys.forward = false; break;
+                case 'KeyS': keys.backward = false; break;
+                case 'KeyA': keys.left = false; break;
+                case 'KeyD': keys.right = false; break;
+                case 'Space': keys.jump = false; break;
+            }
+        });
+
+        // --- 5. 地形自動生成（ノイズによる起伏） ---
+        const objects = [];
+        const blockGeometry = new THREE.BoxGeometry(1, 1, 1);
+
+        function generateWorld() {
+            const worldSize = 25; // 50x50マスの世界を生成
+            
+            for (let x = -worldSize; x <= worldSize; x++) {
+                for (let z = -worldSize; z <= worldSize; z++) {
+                    // 各座標の「高さの基準値」を計算
+                    const noiseVal = Math_noise(x, z);
+                    const surfaceY = Math.floor(noiseVal) + 5; // 最低地上高をかさ上げ
+
+                    // 縦方向にブロックを積み上げる
+                    for (let y = 0; y <= surfaceY; y++) {
+                        let mat = materials[2]; // 基本は石(Stone)
+
+                        if (y === surfaceY) {
+                            mat = materials[0]; // 最表面は草(Grass)
+                        } else if (y > surfaceY - 3) {
+                            mat = materials[1]; // 草の下の3マスは土(Dirt)
+                        }
+
+                        createBlock(x, y, z, mat);
+                    }
+                }
+            }
+        }
+
+        function createBlock(x, y, z, material) {
+            const block = new THREE.Mesh(blockGeometry, material);
+            block.position.set(x, y, z);
+            scene.add(block);
+            objects.push(block);
+        }
+
+        // 初期スポーン位置（丘の上からスタート）
+        camera.position.set(0, 15, 0);
+        generateWorld();
+
+        // --- 6. ブロックの配置と削除 ---
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2(0, 0);
+
+        window.addEventListener('mousedown', (e) => {
+            if (!controls.isLocked) return;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(objects);
+
+            if (intersects.length > 0 && intersects[0].distance < 6) {
+                const intersect = intersects[0];
+
+                if (e.button === 0) { // 左クリック: 削除
+                    scene.remove(intersect.object);
+                    const index = objects.indexOf(intersect.object);
+                    if (index > -1) objects.splice(index, 1);
+                } else if (e.button === 2) { // 右クリック: 配置
+                    const targetPos = new THREE.Vector3().copy(intersect.object.position).add(intersect.face.normal);
+                    
+                    const pGridX = Math.round(camera.position.x);
+                    const pGridZ = Math.round(camera.position.z);
+                    const pGridYBottom = Math.floor(camera.position.y - player.height);
+                    const pGridYTop = Math.floor(camera.position.y);
+
+                    if (targetPos.x === pGridX && targetPos.z === pGridZ && 
+                       (targetPos.y === pGridYBottom || targetPos.y === pGridYTop)) {
+                        return;
+                    }
+                    createBlock(targetPos.x, targetPos.y, targetPos.z, materials[activeMaterialIndex]);
+                }
+            }
+        });
+
+        window.addEventListener('contextmenu', e => e.preventDefault());
+
+        // --- 7. 衝突判定システム ---
+        function checkCollisions(predictedPosition) {
+            player.onGround = false;
+            const pMinY = predictedPosition.y - player.height;
+            const pMaxY = predictedPosition.y;
+
+            // 高速化のため、プレイヤーの周辺にあるブロックだけを簡易判定対象にするとよいが、
+            // 今回はシンプルに全ループ（ブロック数が増えると重くなるので注意）
+            for (let i = 0; i < objects.length; i++) {
+                const block = objects[i];
+                const bPos = block.position;
+
+                // 距離が離れすぎているブロックの判定はスルー（負荷軽減）
+                if (Math.abs(bPos.x - predictedPosition.x) > 2 || 
+                    Math.abs(bPos.z - predictedPosition.z) > 2 || 
+                    Math.abs(bPos.y - predictedPosition.y) > 3) {
+                    continue;
+                }
+
+                const bMinX = bPos.x - 0.5, bMaxX = bPos.x + 0.5;
+                const bMinY = bPos.y - 0.5, bMaxY = bPos.y + 0.5;
+                const bMinZ = bPos.z - 0.5, bMaxZ = bPos.z + 0.5;
+
+                const overlapY = (pMinY < bMaxY) && (pMaxY > bMinY);
+                const overlapX = (predictedPosition.x + player.radius > bMinX) && (predictedPosition.x - player.radius < bMaxX);
+                const overlapZ = (predictedPosition.z + player.radius > bMinZ) && (predictedPosition.z - player.radius < bMaxZ);
+
+                if (overlapX && overlapY && overlapZ) {
+                    // 着地判定
+                    if (player.velocity.y <= 0 && (camera.position.y - player.height) >= bMaxY - 0.25) {
+                        predictedPosition.y = bMaxY + player.height;
+                        player.velocity.y = 0;
+                        player.onGround = true;
+                        continue;
+                    }
+                    // 天井判定
+                    if (player.velocity.y > 0 && camera.position.y <= bMinY + 0.2) {
+                        predictedPosition.y = bMinY - 0.01;
+                        player.velocity.y = 0;
+                        continue;
+                    }
+                    // 壁判定
+                    const fromLeft = (camera.position.x + player.radius) <= bMinX + 0.1;
+                    const fromRight = (camera.position.x - player.radius) >= bMaxX + 0.1;
+                    const fromFront = (camera.position.z + player.radius) <= bMinZ + 0.1;
+                    const fromBack = (camera.position.z - player.radius) >= bMaxZ + 0.1;
+
+                    if (fromLeft) predictedPosition.x = bMinX - player.radius;
+                    else if (fromRight) predictedPosition.x = bMaxX + player.radius;
+                    else if (fromFront) predictedPosition.z = bMinZ - player.radius;
+                    else if (fromBack) predictedPosition.z = bMaxZ + player.radius;
+                }
+            }
+            return predictedPosition;
+        }
+
+        // --- 8. メインループ ---
+        const clock = new THREE.Clock();
+        const moveDirection = new THREE.Vector3();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (controls.isLocked) {
+                const delta = Math.min(clock.getDelta(), 0.1);
+
+                player.velocity.x -= player.velocity.x * 10.0 * delta;
+                player.velocity.z -= player.velocity.z * 10.0 * delta;
+                player.velocity.y -= 9.8 * 3.5 * delta; // 重力
+
+                moveDirection.z = Number(keys.forward) - Number(keys.backward);
+                moveDirection.x = Number(keys.right) - Number(keys.left);
+                moveDirection.normalize();
+
+                const speed = 40.0;
+                if (keys.forward || keys.backward) player.velocity.z -= moveDirection.z * speed * delta;
+                if (keys.left || keys.right) player.velocity.x -= moveDirection.x * speed * delta;
+
+                if (keys.jump && player.onGround) {
+                    player.velocity.y = 11.0; 
+                    player.onGround = false;
+                }
+
+                let newPos = camera.position.clone();
+                const camDir = new THREE.Vector3();
+                camera.getWorldDirection(camDir);
+                camDir.y = 0;
+                camDir.normalize();
+                
+                const camRight = new THREE.Vector3().crossVectors(camera.up, camDir).normalize();
+
+                newPos.addScaledVector(camDir, -player.velocity.z * delta);
+                newPos.addScaledVector(camRight, player.velocity.x * delta);
+                newPos.y += player.velocity.y * delta;
+
+                const correctedPos = checkCollisions(newPos);
+                camera.position.copy(correctedPos);
+
+                // 落下時のリスポーン処理
+                if (camera.position.y < -20) {
+                    camera.position.set(0, 15, 0);
+                    player.velocity.set(0, 0, 0);
+                }
+            }
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>

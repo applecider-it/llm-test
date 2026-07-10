@@ -1,0 +1,15 @@
+
+cd ~/workspace/github/llm-test/src
+
+-----------------------------------
+
+port
+
+html: 8000
+
+-----------------------------------
+
+php -S localhost:8000 -t .
+
+http://localhost:8000
+
