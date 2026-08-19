@@ -11,7 +11,7 @@ html: 8000
 
 gemini
 
-cd ~/workspace/github/llm-test/src
+cd ~/workspace/github/llm-test/gemini
 
 php -S localhost:8000 -t .
 
