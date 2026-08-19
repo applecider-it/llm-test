@@ -8,3 +8,8 @@ gemini
 テキスチャーを追加して、ブロックを選べるようにして、コード全体を返して
 
 初期の地形を生成して、コード全体を返して
+
+
+cursor
+
+htmlのHello Worldをcursor/index.htmlに作って

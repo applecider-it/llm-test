@@ -9,6 +9,21 @@ html: 8000
 
 -----------------------------------
 
+gemini
+
+cd ~/workspace/github/llm-test/src
+
+php -S localhost:8000 -t .
+
+http://localhost:8000
+
+
+-----------------------------------
+
+cursor
+
+cd ~/workspace/github/llm-test/cursor
+
 php -S localhost:8000 -t .
 
 http://localhost:8000
