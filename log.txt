@@ -13,3 +13,5 @@ gemini
 cursor
 
 htmlのHello Worldをcursor/index.htmlに作って
+
+CSSで装飾して、CSSは別ファイルにして
